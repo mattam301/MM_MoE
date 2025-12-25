@@ -105,11 +105,11 @@ class InfoDecompositionPreprocessor(nn.Module):
         # Create decomposition branches for each modality
         self.branches = nn.ModuleList([
             ModalityDecompositionBranch(
-                in_dim=dim,
+                in_dim=modality_dims[modal],
                 out_dim=hidden_dim,
                 num_other_modalities=num_modalities - 1,
                 dropout=0.3
-            ) for dim in modality_dims
+            ) for modal in modality_dims
         ])
         
         # Projections to restore original dimensions
@@ -196,13 +196,11 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
     """
     Enhanced train_and_evaluate_imoe with optional information decomposition.
     
-    CRITICAL: Same signature as original - fully backward compatible.
-    Decomposition is controlled by args.use_info_decomposition flag.
-    
+ 
     Args:
         args: Training arguments
         seed: Random seed
-        fusion_model: Fusion model (InterpretCC - UNCHANGED)
+        fusion_model: Fusion model 
         fusion: Name of fusion method
         
     Returns:
