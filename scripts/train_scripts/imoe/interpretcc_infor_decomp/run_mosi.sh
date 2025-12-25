@@ -10,7 +10,7 @@ echo "========================================================================"
 echo "Unified iMoE Training: Pre-train Decomposition + Train Experts"
 echo "========================================================================"
 
-CUDA_VISIBLE_DEVICES=$device python src/imoe/imoe_main_interpretcc_unified.py \
+CUDA_VISIBLE_DEVICES=$device python src/imoe/train_interpretcc_new.py \
 --data mosi \
 --modality TVA \
 --device $device \
