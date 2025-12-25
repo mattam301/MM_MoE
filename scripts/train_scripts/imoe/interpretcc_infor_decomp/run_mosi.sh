@@ -1,77 +1,141 @@
 #!/bin/bash
+set -e
 
 # ============================================================================
-# QUICK SINGLE RUN FOR TESTING
+# CONFIG
 # ============================================================================
 
-export device=0
+export DEVICE=0
+export DATA=mosi
+export MODALITY=TVA
+export SCRIPT=src/imoe/train_interpretcc_new.py
 
-echo "========================================================================"
-echo "Unified iMoE Training: Pre-train Decomposition + Train Experts"
-echo "========================================================================"
-
-CUDA_VISIBLE_DEVICES=$device python src/imoe/train_interpretcc_new.py \
---data mosi \
---modality TVA \
---device $device \
---seed 0 \
+COMMON_ARGS="\
+--data ${DATA} \
+--modality ${MODALITY} \
+--device ${DEVICE} \
 --n_runs 1 \
 --num_workers 4 \
 --pin_memory True \
 --use_common_ids True \
 --save True \
 --debug False \
-\
-`# ========== PHASE 1: PRE-TRAINING DECOMPOSITION (10 epochs) ==========` \
---use_info_decomposition True \
---decomposition_loss_weight 0.01 \
---use_pretrain True \
---pretrain_epochs 20 \
---pretrain_lr 1e-3 \
---pretrain_method reconstruction \
---pretrain_weight_decay 1e-5 \
-\
-`# ========== PHASE 2: MAIN TRAINING (50 epochs) ==========` \
+"
+
+echo "========================================================================"
+echo "Unified iMoE Experimental Sweep"
+echo "Device: ${DEVICE} | Dataset: ${DATA} | Modality: ${MODALITY}"
+echo "========================================================================"
+
+# ============================================================================
+# 1️⃣ SMOKE TEST (FAST, SMALL, SHOULD NEVER FAIL)
+# ============================================================================
+
+echo ""
+echo "==================== [1] SMOKE TEST ===================="
+
+CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+${COMMON_ARGS} \
+--seed 0 \
+--train_epochs 3 \
+--batch_size 4 \
+--lr 1e-4 \
+--hidden_dim 64 \
+--fusion_sparse False \
+--use_info_decomposition False
+
+# ============================================================================
+# 2️⃣ BATCH SIZE STRESS TEST (CATCHES COLLAPSE BUGS)
+# ============================================================================
+
+echo ""
+echo "==================== [2] BATCH SIZE STRESS ===================="
+
+for BS in 1 2 4 8 16 32; do
+  echo "---- Batch Size = ${BS} ----"
+  CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+  ${COMMON_ARGS} \
+  --seed 0 \
+  --train_epochs 5 \
+  --batch_size ${BS} \
+  --lr 1e-4 \
+  --hidden_dim 128 \
+  --fusion_sparse False \
+  --use_info_decomposition False
+done
+
+# ============================================================================
+# 3️⃣ DECOMPOSITION ABLATION
+# ============================================================================
+
+echo ""
+echo "==================== [3] DECOMPOSITION ABLATION ===================="
+
+for DECOMP in False True; do
+  echo "---- use_info_decomposition = ${DECOMP} ----"
+  CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+  ${COMMON_ARGS} \
+  --seed 0 \
+  --train_epochs 10 \
+  --batch_size 32 \
+  --lr 1e-4 \
+  --hidden_dim 128 \
+  --fusion_sparse False \
+  --use_info_decomposition ${DECOMP} \
+  --decomposition_loss_weight 0.01
+done
+
+# ============================================================================
+# 4️⃣ HYPERPARAMETER SWEEPS (CORE ONES THAT MATTER)
+# ============================================================================
+
+echo ""
+echo "==================== [4] HYPERPARAMETER SWEEP ===================="
+
+for LR in 1e-3 5e-4 1e-4; do
+  for IW in 0.0 0.05 0.1; do
+    for TEMP in 0.5 1.0 2.0; do
+      echo "---- LR=${LR} | Interaction=${IW} | Temp=${TEMP} ----"
+      CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+      ${COMMON_ARGS} \
+      --seed 0 \
+      --train_epochs 15 \
+      --batch_size 32 \
+      --lr ${LR} \
+      --interaction_loss_weight ${IW} \
+      --temperature_rw ${TEMP} \
+      --hidden_dim 128 \
+      --fusion_sparse False \
+      --use_info_decomposition True \
+      --decomposition_loss_weight 0.01
+    done
+  done
+done
+
+# ============================================================================
+# 5️⃣ FULL TRAIN (REFERENCE RUN)
+# ============================================================================
+
+echo ""
+echo "==================== [5] FULL TRAIN (REFERENCE) ===================="
+
+CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+${COMMON_ARGS} \
+--seed 0 \
 --train_epochs 50 \
 --batch_size 32 \
 --lr 1e-4 \
 --weight_decay 1e-5 \
---freeze_decomposer False \
-\
-`# ========== REWEIGHTING MODEL ==========` \
---temperature_rw 1.0 \
+--hidden_dim 128 \
 --hidden_dim_rw 256 \
 --num_layer_rw 2 \
-\
-`# ========== LOSS WEIGHTS ==========` \
+--temperature_rw 1.0 \
 --interaction_loss_weight 0.1 \
---orthogonality_loss_weight 1e-3 \
---load_balancing_weight 1e-2 \
-\
-`# ========== ARCHITECTURE ==========` \
 --fusion_sparse False \
---hidden_dim 128 \
---num_layers_enc 2 \
---num_layers_fus 2 \
---num_layers_pred 2 \
-\
-`# ========== GUMBEL-SOFTMAX ==========` \
---tau 1.0 \
---hard True \
---threshold 0.6 \
---dropout 0.5 \
-\
-`# ========== DECOMPOSITION: 2 Experts per Type (U/R/S) ==========` \
---use_decomposition True \
---decomposition_method learned \
---num_experts_per_type 2 \
---expert_specialization True \
-\
-`# ========== INTERPRETABILITY ==========` \
---log_interactions True \
---save_interaction_maps False
+--use_info_decomposition True \
+--decomposition_loss_weight 0.01
 
 echo ""
 echo "========================================================================"
-echo "✓ Training completed!"
+echo "✓ All experiments completed successfully"
 echo "========================================================================"
