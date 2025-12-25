@@ -93,28 +93,30 @@ class InfoDecompositionPreprocessor(nn.Module):
     Preprocessing module for information decomposition.
     Applied BEFORE encoders to decompose raw features.
     """
-    
+
     def __init__(self, modality_dims, hidden_dim, num_modalities, enabled=False):
         super().__init__()
         self.enabled = enabled
         self.num_modalities = num_modalities
-        
+
         if not enabled:
             return
-        
+
         # Create decomposition branches for each modality
         self.branches = nn.ModuleList([
             ModalityDecompositionBranch(
-                in_dim=modality_dims[modal],
+                in_dim=in_dim,
                 out_dim=hidden_dim,
                 num_other_modalities=num_modalities - 1,
                 dropout=0.3
-            ) for modal in modality_dims
+            )
+            for _, in_dim in modality_dims.items()
         ])
-        
+
         # Projections to restore original dimensions
         self.restore_projections = nn.ModuleList([
-            nn.Linear(hidden_dim, dim) for dim in modality_dims
+            nn.Linear(hidden_dim, out_dim)
+            for out_dim in modality_dims.values()
         ])
     
     def forward(self, modality_features):
