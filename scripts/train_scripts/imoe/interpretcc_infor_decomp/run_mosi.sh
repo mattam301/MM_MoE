@@ -48,7 +48,8 @@ CUDA_VISIBLE_DEVICES=$device python src/imoe/train_interpretcc_new.py \
     --n_runs 1 \
     --interaction_loss_weight $interaction_loss_weight \
     --save False \
-    --use_common_ids True 
+    --use_common_ids True \
+    --use_info_decomposition True
 done
 done
 done
