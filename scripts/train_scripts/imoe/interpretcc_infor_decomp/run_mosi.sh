@@ -24,7 +24,7 @@ CUDA_VISIBLE_DEVICES=$device python src/imoe/train_interpretcc_new.py \
 \
 `# ========== PHASE 1: PRE-TRAINING DECOMPOSITION (10 epochs) ==========` \
 --use_pretrain True \
---pretrain_epochs 10 \
+--pretrain_epochs 20 \
 --pretrain_lr 1e-3 \
 --pretrain_method reconstruction \
 --pretrain_weight_decay 1e-5 \
