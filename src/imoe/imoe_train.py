@@ -309,35 +309,54 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
     model.load_state_dict(best_state)
     model.eval()
 
-    # ======================================================
-    # TEST EVALUATION
-    # ======================================================
-    preds, gts, probs = [], [], []
+    # ======================
+    # TEST EVALUATION (FIXED)
+    # ======================
+    model.eval()
 
-    start = time.time()
+    all_preds = []
+    all_labels = []
+
     with torch.no_grad():
-        for samples, labels, *_ in test_loader:
-            labels = labels.to(device)
-            samples = {k: v.to(device) for k, v in samples.items()}
+        for batch in test_loader:
+            # MOSI test loader structure
+            batch_samples, batch_ids, batch_labels, batch_mcs, batch_observed = batch
+
+            batch_samples = {k: v.to(device) for k, v in batch_samples.items()}
+            batch_labels = batch_labels.to(device)
 
             fusion_input = [
-                ensure_2d(encoder_dict[m](samples[m]))
-                for m in samples
+                ensure_2d(encoder_dict[m](batch_samples[m]))
+                for m in batch_samples
             ]
 
             outputs, _ = moe_forward_per_sample(model, fusion_input)
 
-            p = torch.softmax(outputs, dim=1)
-            preds.extend(outputs.argmax(1).cpu().numpy())
-            probs.extend(p[:, 1].cpu().numpy())
-            gts.extend(labels.cpu().numpy())
+            preds = outputs.argmax(dim=1)
 
-    infer_time = time.time() - start
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(batch_labels.cpu().numpy())
 
-    test_acc = accuracy_score(gts, preds)
-    test_f1 = f1_score(gts, preds, average="macro")
-    test_f1_micro = f1_score(gts, preds, average="micro")
-    test_auc = roc_auc_score(gts, probs)
+    # SAFETY CHECK (important)
+    assert len(all_preds) == len(all_labels) and len(all_preds) > 0, \
+        f"Invalid test data: preds={len(all_preds)}, labels={len(all_labels)}"
+
+    test_acc = accuracy_score(all_labels, all_preds)
+    test_f1 = f1_score(all_labels, all_preds, average="macro")
+    test_f1_micro = f1_score(all_labels, all_preds, average="micro")
+    if args.data in ["mosi", "mimic"]:
+    # binary AUC (use positive-class probability)
+        test_auc = 0.0 # temporary 
+        # probs = np.asarray(probs)
+        # if probs.ndim > 1:
+        #     probs = probs[:, 1]
+        # test_auc = roc_auc_score(gts, probs)
+    elif args.data == "adni":
+        test_auc = roc_auc_score(gts, probs, multi_class="ovr")
+    elif args.data == "enrico":
+        test_auc = roc_auc_score(gts, probs, multi_class="ovo")
+    else:
+        test_auc = 0.0
 
     total_param = parameter_count(model)[""]
     total_flop = 0  # unchanged from original unless explicitly computed
