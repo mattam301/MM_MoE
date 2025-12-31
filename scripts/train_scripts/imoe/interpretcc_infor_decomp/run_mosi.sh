@@ -44,25 +44,25 @@ ${COMMON_ARGS} \
 --fusion_sparse False \
 --use_info_decomposition False
 
-# ============================================================================
-# 2️⃣ BATCH SIZE STRESS TEST (CATCHES COLLAPSE BUGS)
-# ============================================================================
+# # ============================================================================
+# # 2️⃣ BATCH SIZE STRESS TEST (CATCHES COLLAPSE BUGS)
+# # ============================================================================
 
-echo ""
-echo "==================== [2] BATCH SIZE STRESS ===================="
+# echo ""
+# echo "==================== [2] BATCH SIZE STRESS ===================="
 
-for BS in 1 2 4 8 16 32; do
-  echo "---- Batch Size = ${BS} ----"
-  CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
-  ${COMMON_ARGS} \
-  --seed 0 \
-  --train_epochs 5 \
-  --batch_size ${BS} \
-  --lr 1e-4 \
-  --hidden_dim 128 \
-  --fusion_sparse False \
-  --use_info_decomposition False
-done
+# for BS in 1 2 4 8 16 32; do
+#   echo "---- Batch Size = ${BS} ----"
+#   CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+#   ${COMMON_ARGS} \
+#   --seed 0 \
+#   --train_epochs 5 \
+#   --batch_size ${BS} \
+#   --lr 1e-4 \
+#   --hidden_dim 128 \
+#   --fusion_sparse False \
+#   --use_info_decomposition False
+# done
 
 # ============================================================================
 # 3️⃣ DECOMPOSITION ABLATION
