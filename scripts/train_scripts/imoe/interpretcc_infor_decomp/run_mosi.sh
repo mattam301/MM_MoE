@@ -76,7 +76,7 @@ for DECOMP in False True; do
   CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
   ${COMMON_ARGS} \
   --seed 1 \
-  --train_epochs 15 \
+  --train_epochs 30 \
   --batch_size 32 \
   --lr 1e-4 \
   --hidden_dim 128 \
