@@ -91,7 +91,7 @@ def parse_args():
         help="Comet ML project name"
     )
     parser.add_argument(
-        "--comet_workspace", type=str, default="DnR-MoE",
+        "--comet_workspace", type=str, default="mattam301",
         help="Comet ML workspace (optional)"
     )
     parser.add_argument(
