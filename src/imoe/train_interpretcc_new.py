@@ -1,5 +1,5 @@
 """
-CORRECT Enhanced main script - Does NOT modify InterpretCC or any backbone
+CORRECT Enhanced main script with Comet ML support - Does NOT modify InterpretCC or any backbone
 Path: src/imoe/train_interpretcc_new.py
 
 Key principle: All decomposition happens EXTERNALLY in the training wrapper.
@@ -17,6 +17,14 @@ import argparse
 from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="os.fork()")
+
+# Try to import Comet ML
+try:
+    from comet_ml import Experiment
+    COMET_AVAILABLE = True
+except ImportError:
+    COMET_AVAILABLE = False
+    print("⚠ Comet ML not installed. Install with: pip install comet_ml")
 
 # Import UNMODIFIED InterpretCC
 from src.common.fusion_models.interpretcc import InterpretCC
@@ -69,6 +77,32 @@ def parse_args():
     parser.add_argument("--dropout", type=float, default=0.5)
     parser.add_argument("--gate_loss_weight", type=float, default=1e-2)
     
+    # ===== COMET ML ARGUMENTS =====
+    parser.add_argument(
+        "--use_comet", type=str2bool, default=False,
+        help="Enable Comet ML logging"
+    )
+    parser.add_argument(
+        "--comet_api_key", type=str, default="Fd1aGmcly8SdDO5Ez4DMyCIt5",
+        help="Comet ML API key (or set COMET_API_KEY env var)"
+    )
+    parser.add_argument(
+        "--comet_project", type=str, default="imoe-interpretcc",
+        help="Comet ML project name"
+    )
+    parser.add_argument(
+        "--comet_workspace", type=str, default="DnR-MoE",
+        help="Comet ML workspace (optional)"
+    )
+    parser.add_argument(
+        "--experiment_name", type=str, default=None,
+        help="Custom experiment name for Comet ML"
+    )
+    parser.add_argument(
+        "--comet_tags", type=str, nargs='+', default=None,
+        help="Tags for Comet ML experiment"
+    )
+    
     # ===== NEW ARGUMENTS (Only if enhanced module available) =====
     if ENHANCED_AVAILABLE:
         parser.add_argument(
@@ -95,8 +129,82 @@ def parse_args():
     return parser.parse_known_args()
 
 
+def init_comet_experiment(args):
+    """Initialize Comet ML experiment if enabled"""
+    if not args.use_comet:
+        return None
+    
+    if not COMET_AVAILABLE:
+        print("⚠ Comet ML requested but not installed. Continuing without logging.")
+        return None
+    
+    # Get API key from args or environment
+    api_key = args.comet_api_key or os.environ.get('COMET_API_KEY')
+    
+    if not api_key:
+        print("⚠ Comet ML API key not provided. Set COMET_API_KEY env var or use --comet_api_key")
+        return None
+    
+    # Create experiment
+    experiment = Experiment(
+        api_key=api_key,
+        project_name=args.comet_project,
+        workspace=args.comet_workspace,
+        auto_metric_logging=True,
+        auto_param_logging=True,
+        auto_output_logging="simple",
+    )
+    
+    # Set experiment name
+    if args.experiment_name:
+        experiment.set_name(args.experiment_name)
+    else:
+        # Auto-generate name based on config
+        name = f"{args.data}_{args.modality}_lr{args.lr}_bs{args.batch_size}"
+        if ENHANCED_AVAILABLE and getattr(args, 'use_info_decomposition', False):
+            name += "_decomposed"
+        experiment.set_name(name)
+    
+    # Add tags
+    tags = args.comet_tags or []
+    tags.extend([args.data, f"modality_{args.modality}", "interpretcc"])
+    if ENHANCED_AVAILABLE and getattr(args, 'use_info_decomposition', False):
+        tags.append("info_decomposition")
+    experiment.add_tags(tags)
+    
+    # Log all hyperparameters
+    experiment.log_parameters(vars(args))
+    
+    print(f"✓ Comet ML experiment initialized: {experiment.url}")
+    
+    return experiment
+
+
+def log_run_metrics(experiment, seed, run_idx, metrics, stage="test"):
+    """Log metrics for a single run to Comet ML"""
+    if experiment is None:
+        return
+    
+    with experiment.context_manager(f"run_{run_idx}_seed_{seed}"):
+        for metric_name, metric_value in metrics.items():
+            experiment.log_metric(f"{stage}_{metric_name}", metric_value)
+
+
+def log_summary_metrics(experiment, summary_metrics):
+    """Log summary metrics across all runs to Comet ML"""
+    if experiment is None:
+        return
+    
+    with experiment.context_manager("summary"):
+        for metric_name, metric_value in summary_metrics.items():
+            experiment.log_metric(metric_name, metric_value)
+
+
 def main():
     args, _ = parse_args()
+    
+    # Initialize Comet ML experiment
+    experiment = init_comet_experiment(args)
     
     logger = setup_logger(
         f"./logs/imoe/interpretcc/{args.data}",
@@ -129,6 +237,10 @@ def main():
         "hidden_dim": args.hidden_dim,
     }
     
+    # Log model configuration to Comet
+    if experiment:
+        experiment.log_parameters(model_kwargs)
+    
     # Add decomposition config if available and enabled
     use_decomposition = ENHANCED_AVAILABLE and getattr(args, 'use_info_decomposition', False)
     
@@ -138,6 +250,17 @@ def main():
         model_kwargs["decomposition_alpha_r"] = args.decomposition_alpha_r
         model_kwargs["decomposition_alpha_s"] = args.decomposition_alpha_s
         model_kwargs["decomposition_loss_weight"] = args.decomposition_loss_weight
+        
+        # Log decomposition params to Comet
+        if experiment:
+            decomp_params = {
+                "decomposition_enabled": True,
+                "decomposition_alpha_u": args.decomposition_alpha_u,
+                "decomposition_alpha_r": args.decomposition_alpha_r,
+                "decomposition_alpha_s": args.decomposition_alpha_s,
+                "decomposition_loss_weight": args.decomposition_loss_weight,
+            }
+            experiment.log_parameters(decomp_params)
         
         log_summary += "\n" + "="*80 + "\n"
         log_summary += "INFORMATION DECOMPOSITION ENABLED (External to InterpretCC)\n"
@@ -187,6 +310,10 @@ def main():
         print(f"Run {i+1}/{len(seeds) if len(seeds) > 1 else 1}, Seed: {seed}")
         print(f"{'='*80}\n")
         
+        # Log run start to Comet
+        if experiment:
+            experiment.log_text(f"Starting run {i+1} with seed {seed}")
+        
         # ===== CRITICAL: InterpretCC is initialized with ORIGINAL signature only =====
         # NO new arguments added to InterpretCC - it remains completely unchanged
         fusion_model = InterpretCC(
@@ -214,6 +341,18 @@ def main():
             val_accs.append(val_acc)
             test_accs.append(test_acc)
             test_maes.append(test_mae)
+            
+            # Log run metrics to Comet
+            log_run_metrics(experiment, seed, i, {
+                "val_loss": val_loss,
+                "val_acc": val_acc,
+                "test_acc": test_acc,
+                "test_mae": test_mae,
+                "train_time": train_time,
+                "infer_time": infer_time,
+                "flops": flop,
+                "params": param,
+            })
         else:
             (
                 val_acc, val_f1, val_auc,
@@ -228,6 +367,21 @@ def main():
             test_f1s.append(test_f1)
             test_f1_micros.append(test_f1_micro)
             test_aucs.append(test_auc)
+            
+            # Log run metrics to Comet
+            log_run_metrics(experiment, seed, i, {
+                "val_acc": val_acc,
+                "val_f1": val_f1,
+                "val_auc": val_auc,
+                "test_acc": test_acc,
+                "test_f1": test_f1,
+                "test_f1_micro": test_f1_micro,
+                "test_auc": test_auc,
+                "train_time": train_time,
+                "infer_time": infer_time,
+                "flops": flop,
+                "params": param,
+            })
         
         train_times.append(train_time)
         infer_times.append(infer_time)
@@ -246,6 +400,22 @@ def main():
     mean_param = np.mean(params)
     variance_param = np.var(params)
 
+    # Log computational metrics to Comet
+    if experiment:
+        computational_metrics = {
+            "mean_train_time": mean_train_time,
+            "std_train_time": np.sqrt(variance_train_time),
+            "mean_infer_time": mean_infer_time,
+            "std_infer_time": np.sqrt(variance_infer_time),
+            "mean_flops": mean_flop,
+            "std_flops": np.sqrt(variance_flop),
+            "mean_gflops": mean_gflop,
+            "std_gflops": np.sqrt(variance_gflop),
+            "mean_params": mean_param,
+            "std_params": np.sqrt(variance_param),
+        }
+        log_summary_metrics(experiment, computational_metrics)
+
     log_summary += "\n"
     log_summary += f"Train one epoch time: {mean_train_time:.2f} ± {variance_train_time:.2f}\n"
     log_summary += f"Inference one epoch time: {mean_infer_time:.2f} ± {variance_infer_time:.2f}\n"
@@ -263,6 +433,20 @@ def main():
         test_std_acc = np.std(test_accs) * 100
         test_avg_mae = np.mean(test_maes)
         test_std_mae = np.std(test_maes)
+        
+        # Log final metrics to Comet
+        if experiment:
+            final_metrics = {
+                "val_avg_acc": val_avg_acc,
+                "val_std_acc": val_std_acc,
+                "val_avg_loss": val_avg_loss,
+                "val_std_loss": val_std_loss,
+                "test_avg_acc": test_avg_acc,
+                "test_std_acc": test_std_acc,
+                "test_avg_mae": test_avg_mae,
+                "test_std_mae": test_std_mae,
+            }
+            log_summary_metrics(experiment, final_metrics)
 
         log_summary += f"[Val] Average Accuracy: {val_avg_acc:.2f} ± {val_std_acc:.2f}\n"
         log_summary += f"[Val] Average Loss: {val_avg_loss:.2f} ± {val_std_loss:.2f}\n"
@@ -288,6 +472,26 @@ def main():
         test_std_f1_micro = np.std(test_f1_micros) * 100
         test_avg_auc = np.mean(test_aucs) * 100
         test_std_auc = np.std(test_aucs) * 100
+        
+        # Log final metrics to Comet
+        if experiment:
+            final_metrics = {
+                "val_avg_acc": val_avg_acc,
+                "val_std_acc": val_std_acc,
+                "val_avg_f1": val_avg_f1,
+                "val_std_f1": val_std_f1,
+                "val_avg_auc": val_avg_auc,
+                "val_std_auc": val_std_auc,
+                "test_avg_acc": test_avg_acc,
+                "test_std_acc": test_std_acc,
+                "test_avg_f1_macro": test_avg_f1,
+                "test_std_f1_macro": test_std_f1,
+                "test_avg_f1_micro": test_avg_f1_micro,
+                "test_std_f1_micro": test_std_f1_micro,
+                "test_avg_auc": test_avg_auc,
+                "test_std_auc": test_std_auc,
+            }
+            log_summary_metrics(experiment, final_metrics)
 
         log_summary += f"[Val] Average Accuracy: {val_avg_acc:.2f} ± {val_std_acc:.2f}\n"
         log_summary += f"[Val] Average F1 Score: {val_avg_f1:.2f} ± {val_std_f1:.2f}\n"
@@ -303,9 +507,19 @@ def main():
 
     logger.info(log_summary)
     
+    # Log summary text to Comet
+    if experiment:
+        experiment.log_text(log_summary, metadata={"type": "summary"})
+    
     print(f"\n{'='*80}")
     print("✓ Training completed successfully!")
+    if experiment:
+        print(f"✓ Results logged to Comet ML: {experiment.url}")
     print(f"{'='*80}\n")
+    
+    # End Comet experiment
+    if experiment:
+        experiment.end()
 
 
 if __name__ == "__main__":

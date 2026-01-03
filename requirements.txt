@@ -157,3 +157,4 @@ wcwidth==0.2.13
 xxhash==3.5.0
 yacs==0.1.8
 yarl==1.15.5
+comet-ml

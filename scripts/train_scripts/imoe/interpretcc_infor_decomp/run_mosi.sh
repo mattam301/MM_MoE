@@ -70,21 +70,21 @@ echo "========================================================================"
 
 echo ""
 echo "==================== [3] DECOMPOSITION ABLATION ===================="
-
-for DECOMP in False True; do
-  echo "---- use_enhanced_pid = ${DECOMP} ----"
-  CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
-  ${COMMON_ARGS} \
-  --seed 1 \
-  --train_epochs 30 \
-  --batch_size 32 \
-  --lr 1e-4 \
-  --hidden_dim 128 \
-  --fusion_sparse False \
-  --use_enhanced_pid ${DECOMP} \
-  --decomposition_loss_weight 0.01
+for i in 1 2 3 4 5 6 7 8; do
+  for DECOMP in False True; do
+    echo "---- use_enhanced_pid = ${DECOMP} ----"
+    CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+    ${COMMON_ARGS} \
+    --seed 1 \
+    --train_epochs 30 \
+    --batch_size 32 \
+    --lr 1e-4 \
+    --hidden_dim 128 \
+    --fusion_sparse False \
+    --use_enhanced_pid ${DECOMP} \
+    --decomposition_loss_weight 0.01
+  done
 done
-
 # # ============================================================================
 # # 4️⃣ HYPERPARAMETER SWEEPS (CORE ONES THAT MATTER)
 # # ============================================================================
