@@ -75,7 +75,7 @@ for i in 1 2 3 4 5 6 7 8; do
     echo "---- use_enhanced_pid = ${DECOMP} ----"
     CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
     ${COMMON_ARGS} \
-    --seed 1 \
+    --seed $i \
     --train_epochs 30 \
     --batch_size 32 \
     --lr 1e-4 \
