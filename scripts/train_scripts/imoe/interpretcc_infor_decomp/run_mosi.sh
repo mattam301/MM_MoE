@@ -83,7 +83,7 @@ for i in 1 2 3 4 5 6 7 8; do
     --fusion_sparse False \
     --use_enhanced_pid ${DECOMP} \
     --decomposition_loss_weight 0.01 \
-    --use_comet
+    --use_comet True
   done
 done
 # # ============================================================================
