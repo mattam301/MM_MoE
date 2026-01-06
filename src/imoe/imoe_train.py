@@ -47,6 +47,8 @@ from src.common.utils import (
 # ===================== MODELS =====================
 from src.imoe.InteractionMoE import InteractionMoE
 from src.imoe.InteractionMoERegression import InteractionMoERegression
+# ===================== PID INSIGHTS =====================
+from src.imoe.pid_insight import log_per_class_split, log_confidence_correlation, print_trend_ascii
 
 set_style()
 
@@ -459,6 +461,8 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
         temperature_rw=args.temperature_rw,
     ).to(device)
 
+    tracker = SimpleComponentTracker(save_path=f"./results/{args.data}_pid.csv")
+
     # ======================================================
     # DECOMPOSITION MODULE (OPTIONAL)
     # ======================================================
@@ -546,12 +550,60 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                 else:
                     _, (u, r, s) = decomp(raw)
                     loss = loss + decomp_config["ortho_weight"] * decomposition_loss(u, r, s)
+                
+                # Log per-class info split every 10 epochs
+                if decomp is not None and epoch % 5 == 0:  # Every 5 epochs
+                    with torch.no_grad():
+                        # Get validation batch for analysis
+                        sample_batch = next(iter(val_loader))
+                        samples, batch_labels = sample_batch[0], sample_batch[1]
+                        samples = {k: v.to(device) for k, v in samples.items()}
+                        batch_labels = batch_labels.to(device)
+                        
+                        # Encode
+                        fusion_input = [ensure_2d(encoder_dict[m](samples[m])) for m in samples]
+                        outputs, _ = moe_forward_per_sample(model, fusion_input)
+                        preds = outputs.argmax(dim=1)
+                        
+                        # Get PID components
+                        raw = [ensure_2d(samples[m]) for m in sorted(samples)]
+                        if isinstance(decomp, EnhancedInfoDecomposition):
+                            _, (u, r, s), _ = decomp(raw)
+                        else:
+                            _, (u, r, s) = decomp(raw)
+                        
+                        # === LOGGING ===
+                        print(f"\n  [Epoch {epoch+1}] PID Analysis:")
+                        
+                        # 1. Overall split
+                        u_c = u.norm(dim=1).mean().item()
+                        r_c = r.norm(dim=1).mean().item()
+                        s_c = s.norm(dim=1).mean().item()
+                        total = u_c + r_c + s_c + 1e-8
+                        print(f"    Info Split: U={u_c/total*100:.1f}% | R={r_c/total*100:.1f}% | S={s_c/total*100:.1f}%")
+                        
+                        # 2. Dominant component distribution
+                        from src.imoe.pid_insight import log_dominant_component_distribution
+                        log_dominant_component_distribution(u, r, s)
+                        
+                        # 3. Accuracy by component
+                        from src.imoe.pid_insight import log_accuracy_by_dominant_component
+                        log_accuracy_by_dominant_component(u, r, s, preds, batch_labels)
+                        
+                        # 4. Confidence correlation
+                        log_confidence_correlation(u, r, s, outputs)
+                        
+                        # 5. Track for later
+                        tracker.log(epoch, u, r, s, val_acc=val_acc)
 
             loss.backward()
             optimizer.step()
 
         train_time += time.time() - start
-
+        if decomp is not None:
+            tracker.save()
+            tracker.print_summary()
+            print_trend_ascii(tracker.data)
         # ==================================================
         # VALIDATION (same structure as original)
         # ==================================================
