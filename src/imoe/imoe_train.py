@@ -517,6 +517,31 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
         "aux_weight": getattr(args, 'pid_aux_weight', 0.3),
     }
     print(decomp)
+    
+    ### Pre - training - setting
+    from src.imoe.pid_sample_tracker import PIDSampleTracker
+
+    # Determine class names based on dataset
+    CLASS_NAMES = {
+        "mosi": ["Negative", "Positive"],
+        "mimic": ["No Mortality", "Mortality"],
+        "adni": ["CN", "MCI", "AD"],
+        "enrico": [f"Class_{i}" for i in range(20)],  # Update as needed
+    }
+
+    MODALITY_NAMES = {
+        "mosi": ["text", "audio", "vision"],
+        "mimic": ["clinical", "imaging"],
+        "adni": ["mri", "pet", "clinical"],
+    }
+
+    # Initialize tracker
+    pid_tracker = PIDSampleTracker(
+        save_dir=f"./results/{args.data}/pid_analysis",
+        class_names=CLASS_NAMES.get(args.data, []),
+        modality_names=MODALITY_NAMES.get(args.data, list(args.modality)),
+        max_samples_per_epoch=200,  # Limit for memory
+    )
 
     # ======================================================
     # TRAINING LOOP (same structure as original)
@@ -553,20 +578,39 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                 else:
                     _, (u, r, s) = decomp(raw)
                     loss = loss + decomp_config["ortho_weight"] * decomposition_loss(u, r, s)
-                
-                # Log per-class info split every 10 epochs
-                if decomp is not None and epoch % 5 == 0:  # Every 5 epochs
-                    with torch.no_grad():
-                        # Get validation batch for analysis
-                        sample_batch = next(iter(val_loader))
-                        samples, batch_labels = sample_batch[0], sample_batch[1]
+
+            # Detailed PID analysis every N epochs
+            if decomp is not None and epoch % 5 == 0:
+                with torch.no_grad():
+                    # Set context
+                    pid_tracker.set_context(epoch=epoch, split="val")
+                    
+                    # Analyze multiple validation batches for better coverage
+                    num_batches_to_analyze = 3
+                    val_iter = iter(val_loader)
+                    
+                    for batch_num in range(min(num_batches_to_analyze, len(val_loader))):
+                        try:
+                            batch = next(val_iter)
+                        except StopIteration:
+                            break
+                        
+                        # Unpack batch - adjust based on your dataloader format
+                        if len(batch) == 5:
+                            samples, sample_ids, batch_labels, batch_mcs, batch_observed = batch
+                        elif len(batch) == 2:
+                            samples, batch_labels = batch
+                            sample_ids = torch.arange(len(batch_labels))  # Fallback IDs
+                        else:
+                            samples, batch_labels = batch[0], batch[1]
+                            sample_ids = batch[2] if len(batch) > 2 else torch.arange(len(batch_labels))
+                        
                         samples = {k: v.to(device) for k, v in samples.items()}
                         batch_labels = batch_labels.to(device)
                         
-                        # Encode
+                        # Forward pass
                         fusion_input = [ensure_2d(encoder_dict[m](samples[m])) for m in samples]
                         outputs, _ = moe_forward_per_sample(model, fusion_input)
-                        preds = outputs.argmax(dim=1)
                         
                         # Get PID components
                         raw = [ensure_2d(samples[m]) for m in sorted(samples)]
@@ -575,29 +619,16 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                         else:
                             _, (u, r, s) = decomp(raw)
                         
-                        # === LOGGING ===
-                        print(f"\n  [Epoch {epoch+1}] PID Analysis:")
-                        
-                        # 1. Overall split
-                        u_c = u.norm(dim=1).mean().item()
-                        r_c = r.norm(dim=1).mean().item()
-                        s_c = s.norm(dim=1).mean().item()
-                        total = u_c + r_c + s_c + 1e-8
-                        print(f"    Info Split: U={u_c/total*100:.1f}% | R={r_c/total*100:.1f}% | S={s_c/total*100:.1f}%")
-                        
-                        # 2. Dominant component distribution
-                        from src.imoe.pid_insight import log_dominant_component_distribution
-                        log_dominant_component_distribution(u, r, s)
-                        
-                        # 3. Accuracy by component
-                        from src.imoe.pid_insight import log_accuracy_by_dominant_component
-                        log_accuracy_by_dominant_component(u, r, s, preds, batch_labels)
-                        
-                        # 4. Confidence correlation
-                        log_confidence_correlation(u, r, s, outputs)
-                        
-                        # # 5. Track for later
-                        # tracker.log(epoch, u, r, s, val_acc=val_acc)
+                        # Analyze with full sample tracking
+                        pid_tracker.analyze_batch(
+                            sample_ids=sample_ids,
+                            u=u, r=r, s=s,
+                            labels=batch_labels,
+                            outputs=outputs,
+                            raw_samples=samples,  # Include for snippets
+                            verbose=(batch_num == 0),  # Only print first batch
+                        )
+
 
             loss.backward()
             optimizer.step()
@@ -658,6 +689,40 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
             best_val_f1 = val_f1
             best_val_auc = val_auc
             best_state = deepcopy(model.state_dict())
+            
+    ## Analysis after training
+    
+        # ============================================================
+    # AFTER TRAINING LOOP
+    # ============================================================
+    if decomp is not None:
+        # Save all sample records
+        pid_tracker.save_records(filename=f"{args.data}_seed{seed}")
+        
+        # Generate comprehensive report
+        pid_tracker.generate_report()
+        
+        # Query specific samples for investigation
+        print("\n" + "="*60)
+        print("SAMPLE QUERIES")
+        print("="*60)
+        
+        # Find synergy-dominant errors
+        synergy_errors = pid_tracker.get_samples_by_criteria(
+            dominant_component='S',
+            correct_only=False
+        )
+        print(f"\nSynergy-dominant errors: {len(synergy_errors)} samples")
+        for r in synergy_errors[:5]:
+            print(f"  ID={r.sample_id}: S={r.synergy_pct:.1f}%, True={r.true_label_name}")
+        
+        # Find high-confidence samples per class
+        for cls in range(n_labels):
+            high_conf = pid_tracker.get_samples_by_criteria(
+                label=cls,
+                min_confidence=0.9
+            )
+            print(f"\nClass {cls} high-confidence samples: {len(high_conf)}")
 
     # ======================================================
     # LOAD BEST MODEL
