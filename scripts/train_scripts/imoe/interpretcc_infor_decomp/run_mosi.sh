@@ -81,6 +81,7 @@ echo "========================================================================"
 #     --lr 1e-4 \
 #     --hidden_dim 128 \
 #     --fusion_sparse False \
+#     --use_info_decomposition ${DECOMP} \
 #     --use_enhanced_pid ${DECOMP} \
 #     --decomposition_loss_weight 0.01 \
 #     --use_comet True
@@ -133,7 +134,7 @@ ${COMMON_ARGS} \
 --temperature_rw 1.0 \
 --interaction_loss_weight 0.1 \
 --fusion_sparse False \
---use_info_decomposition \
+--use_info_decomposition True \
 --use_enhanced_pid True \
 --decomposition_loss_weight 0.01 \
 --use_comet True

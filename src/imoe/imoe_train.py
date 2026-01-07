@@ -596,17 +596,17 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                         # 4. Confidence correlation
                         log_confidence_correlation(u, r, s, outputs)
                         
-                        # 5. Track for later
-                        tracker.log(epoch, u, r, s, val_acc=val_acc)
+                        # # 5. Track for later
+                        # tracker.log(epoch, u, r, s, val_acc=val_acc)
 
             loss.backward()
             optimizer.step()
 
         train_time += time.time() - start
-        if decomp is not None:
-            tracker.save()
-            tracker.print_summary()
-            print_trend_ascii(tracker.data)
+        # if decomp is not None:
+        #     tracker.save()
+        #     tracker.print_summary()
+        #     print_trend_ascii(tracker.data)
         # ==================================================
         # VALIDATION (same structure as original)
         # ==================================================
