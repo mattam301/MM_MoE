@@ -461,6 +461,8 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
         temperature_rw=args.temperature_rw,
     ).to(device)
 
+    # ======================================================
+    from src.imoe.pid_insight import SimpleComponentTracker
     tracker = SimpleComponentTracker(save_path=f"./results/{args.data}_pid.csv")
 
     # ======================================================
@@ -514,6 +516,7 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
         "kl_weight": getattr(args, 'pid_kl_weight', 0.001),
         "aux_weight": getattr(args, 'pid_aux_weight', 0.3),
     }
+    print(decomp)
 
     # ======================================================
     # TRAINING LOOP (same structure as original)

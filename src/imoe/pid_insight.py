@@ -246,4 +246,4 @@ def print_trend_ascii(tracker_data, width=40):
     print(f"    S: {make_sparkline(s_vals)} ({s_vals[0]:.0f}%→{s_vals[-1]:.0f}%)")
 
 # Usage (after training):
-print_trend_ascii(tracker.data)
+# print_trend_ascii(tracker.data)

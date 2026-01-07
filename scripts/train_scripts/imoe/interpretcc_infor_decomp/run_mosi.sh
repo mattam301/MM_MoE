@@ -68,24 +68,24 @@ echo "========================================================================"
 # 3️⃣ DECOMPOSITION ABLATION
 # ============================================================================
 
-echo ""
-echo "==================== [3] DECOMPOSITION ABLATION ===================="
-for i in 1 2 3 4 5 6 7 8; do
-  for DECOMP in False True; do
-    echo "---- use_enhanced_pid = ${DECOMP} ----"
-    CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
-    ${COMMON_ARGS} \
-    --seed $i \
-    --train_epochs 30 \
-    --batch_size 32 \
-    --lr 1e-4 \
-    --hidden_dim 128 \
-    --fusion_sparse False \
-    --use_enhanced_pid ${DECOMP} \
-    --decomposition_loss_weight 0.01 \
-    --use_comet True
-  done
-done
+# echo ""
+# echo "==================== [3] DECOMPOSITION ABLATION ===================="
+# for i in 1 2 3 4 5 6 7 8; do
+#   for DECOMP in False True; do
+#     echo "---- use_enhanced_pid = ${DECOMP} ----"
+#     CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+#     ${COMMON_ARGS} \
+#     --seed $i \
+#     --train_epochs 30 \
+#     --batch_size 32 \
+#     --lr 1e-4 \
+#     --hidden_dim 128 \
+#     --fusion_sparse False \
+#     --use_enhanced_pid ${DECOMP} \
+#     --decomposition_loss_weight 0.01 \
+#     --use_comet True
+#   done
+# done
 # # ============================================================================
 # # 4️⃣ HYPERPARAMETER SWEEPS (CORE ONES THAT MATTER)
 # # ============================================================================
@@ -117,24 +117,25 @@ done
 # # 5️⃣ FULL TRAIN (REFERENCE RUN)
 # # ============================================================================
 
-# echo ""
-# echo "==================== [5] FULL TRAIN (REFERENCE) ===================="
+echo ""
+echo "==================== [5] FULL TRAIN (REFERENCE) ===================="
 
-# CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
-# ${COMMON_ARGS} \
-# --seed 0 \
-# --train_epochs 50 \
-# --batch_size 32 \
-# --lr 1e-4 \
-# --weight_decay 1e-5 \
-# --hidden_dim 128 \
-# --hidden_dim_rw 256 \
-# --num_layer_rw 2 \
-# --temperature_rw 1.0 \
-# --interaction_loss_weight 0.1 \
-# --fusion_sparse False \
-# --use_info_decomposition True \
-# --decomposition_loss_weight 0.01
+CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
+${COMMON_ARGS} \
+--seed 0 \
+--train_epochs 50 \
+--batch_size 32 \
+--lr 1e-4 \
+--weight_decay 1e-5 \
+--hidden_dim 128 \
+--hidden_dim_rw 256 \
+--num_layer_rw 2 \
+--temperature_rw 1.0 \
+--interaction_loss_weight 0.1 \
+--fusion_sparse False \
+--use_enhanced_pid True \
+--decomposition_loss_weight 0.01 \
+--use_comet True
 
 # echo ""
 # echo "========================================================================"
