@@ -133,6 +133,7 @@ ${COMMON_ARGS} \
 --temperature_rw 1.0 \
 --interaction_loss_weight 0.1 \
 --fusion_sparse False \
+--use_info_decomposition \
 --use_enhanced_pid True \
 --decomposition_loss_weight 0.01 \
 --use_comet True

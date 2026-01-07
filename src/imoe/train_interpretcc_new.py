@@ -33,7 +33,7 @@ from src.common.fusion_models.interpretcc import InterpretCC
 try:
     from src.imoe.imoe_train import train_and_evaluate_imoe
     ENHANCED_AVAILABLE = True
-    print("✓ Using ENHANCED training with information decomposition support")
+    print("✓ Able to use ENHANCED training with information decomposition support")
 except ImportError:
     from src.imoe.imoe_train import train_and_evaluate_imoe
     ENHANCED_AVAILABLE = False

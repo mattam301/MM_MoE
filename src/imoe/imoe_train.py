@@ -471,7 +471,7 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
     decomp = None
     use_simple = getattr(args, 'use_info_decomposition', False)
     use_enhanced = getattr(args, 'use_enhanced_pid', False)
-    
+    print(f"Using decomposition: simple={use_simple}, enhanced={use_enhanced}")
     if use_enhanced:
         dims = [input_dims[m] for m in sorted(input_dims)]
         decomp = EnhancedInfoDecomposition(
