@@ -124,7 +124,7 @@ echo "==================== [5] FULL TRAIN (REFERENCE) ===================="
 CUDA_VISIBLE_DEVICES=${DEVICE} python ${SCRIPT} \
 ${COMMON_ARGS} \
 --seed 0 \
---train_epochs 50 \
+--train_epochs 15 \
 --batch_size 32 \
 --lr 1e-4 \
 --weight_decay 1e-5 \

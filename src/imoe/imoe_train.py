@@ -520,6 +520,40 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
     
     ### Pre - training - setting
     from src.imoe.pid_sample_tracker import PIDSampleTracker
+    
+    class SampleIndexTracker:
+        """Generate unique sample IDs when dataloader doesn't provide them."""
+        
+        def __init__(self):
+            self.epoch_offset = 0
+            self.batch_counter = 0
+            self.sample_counter = 0
+            
+        def reset_epoch(self, epoch: int):
+            """Reset counters for new epoch."""
+            self.epoch_offset = epoch * 100000  # Ensure unique across epochs
+            self.batch_counter = 0
+            self.sample_counter = 0
+        
+        def get_ids(self, batch_size: int) -> torch.Tensor:
+            """Generate unique IDs for this batch."""
+            start_idx = self.epoch_offset + self.sample_counter
+            self.sample_counter += batch_size
+            self.batch_counter += 1
+            return torch.arange(start_idx, start_idx + batch_size)
+        
+        def get_batch_info(self) -> str:
+            """Get info about current batch position."""
+            return f"Batch #{self.batch_counter}, samples {self.sample_counter - 32}-{self.sample_counter}"
+
+    # Initialize trackers
+    sample_id_tracker = SampleIndexTracker()
+    pid_tracker = PIDSampleTracker(
+        save_dir=f"./results/{args.data}/pid_analysis",
+        class_names=["Negative", "Positive"],  # Adjust for your dataset
+        modality_names=list(args.modality) if hasattr(args, 'modality') else ["text", "audio", "vision"],
+    )
+
 
     # Determine class names based on dataset
     CLASS_NAMES = {
@@ -582,10 +616,10 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
             # Detailed PID analysis every N epochs
             if decomp is not None and epoch % 5 == 0:
                 with torch.no_grad():
-                    # Set context
                     pid_tracker.set_context(epoch=epoch, split="val")
+                    sample_id_tracker.reset_epoch(epoch)
                     
-                    # Analyze multiple validation batches for better coverage
+                    # Analyze multiple validation batches
                     num_batches_to_analyze = 3
                     val_iter = iter(val_loader)
                     
@@ -595,17 +629,36 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                         except StopIteration:
                             break
                         
-                        # Unpack batch - adjust based on your dataloader format
-                        if len(batch) == 5:
-                            samples, sample_ids, batch_labels, batch_mcs, batch_observed = batch
-                        elif len(batch) == 2:
-                            samples, batch_labels = batch
-                            sample_ids = torch.arange(len(batch_labels))  # Fallback IDs
+                        # ====================================================
+                        # SMART BATCH UNPACKING
+                        # ====================================================
+                        if isinstance(batch, (list, tuple)):
+                            # Determine format based on batch structure
+                            if len(batch) >= 5 and isinstance(batch[1], torch.Tensor) and batch[1].dim() == 1:
+                                # Format: (samples, ids, labels, mcs, observed) - test format
+                                samples = batch[0]
+                                sample_ids = batch[1]
+                                batch_labels = batch[2]
+                                print(f"    [Batch {batch_num}] Using dataloader IDs")
+                            elif len(batch) >= 2:
+                                # Format: (samples, labels, ...) - train/val format
+                                samples = batch[0]
+                                batch_labels = batch[1]
+                                # Generate sequential IDs
+                                batch_size = batch_labels.shape[0]
+                                sample_ids = sample_id_tracker.get_ids(batch_size)
+                                if batch_num == 0:
+                                    print(f"    [Batch {batch_num}] Generated IDs: {sample_ids[:5].tolist()}...")
+                            else:
+                                print(f"    [Batch {batch_num}] Unknown batch format, skipping")
+                                continue
                         else:
-                            samples, batch_labels = batch[0], batch[1]
-                            sample_ids = batch[2] if len(batch) > 2 else torch.arange(len(batch_labels))
+                            print(f"    Unexpected batch type: {type(batch)}")
+                            continue
                         
-                        samples = {k: v.to(device) for k, v in samples.items()}
+                        # Move to device
+                        if isinstance(samples, dict):
+                            samples = {k: v.to(device) for k, v in samples.items()}
                         batch_labels = batch_labels.to(device)
                         
                         # Forward pass
@@ -619,13 +672,15 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                         else:
                             _, (u, r, s) = decomp(raw)
                         
-                        # Analyze with full sample tracking
+                        # ====================================================
+                        # ANALYZE WITH PROPER IDs
+                        # ====================================================
                         pid_tracker.analyze_batch(
                             sample_ids=sample_ids,
                             u=u, r=r, s=s,
                             labels=batch_labels,
                             outputs=outputs,
-                            raw_samples=samples,  # Include for snippets
+                            raw_samples=samples,
                             verbose=(batch_num == 0),  # Only print first batch
                         )
 
