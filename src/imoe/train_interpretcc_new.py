@@ -87,7 +87,7 @@ def parse_args():
         help="Comet ML API key (or set COMET_API_KEY env var)"
     )
     parser.add_argument(
-        "--comet_project", type=str, default="imoe-interpretcc",
+        "--comet_project", type=str, default="imoe-interpretcc_cross_modal_synergy",
         help="Comet ML project name"
     )
     parser.add_argument(

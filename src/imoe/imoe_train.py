@@ -743,7 +743,7 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
                     loss = loss + decomp_config["ortho_weight"] * decomposition_loss(u, r, s)
 
             # Detailed PID analysis every N epochs
-            if decomp is not None and epoch % 5 == 0:
+            if decomp is not None and epoch + 1 % 5 == 0:
                 with torch.no_grad():
                     pid_tracker.set_context(epoch=epoch, split="val")
                     sample_id_tracker.reset_epoch(epoch)

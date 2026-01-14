@@ -15,7 +15,7 @@ COMMON_ARGS="\
 --modality ${MODALITY} \
 --device ${DEVICE} \
 --n_runs 1 \
---num_workers 4 \
+--num_workers 2 \
 --pin_memory True \
 --use_common_ids True \
 --save True \
@@ -136,7 +136,7 @@ ${COMMON_ARGS} \
 --fusion_sparse False \
 --use_info_decomposition True \
 --use_enhanced_pid True \
---decomposition_loss_weight 0.01 \
+--decomposition_loss_weight 0.02 \
 --use_comet True \
 --experiment_name "cross_modal_synergy_mosi_imoe"
 
