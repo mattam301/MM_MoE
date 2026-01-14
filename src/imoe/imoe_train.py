@@ -287,77 +287,206 @@ class EnhancedModalityBranch(nn.Module):
 
 
 class EnhancedInfoDecomposition(nn.Module):
-    """Enhanced PID with optional advanced features."""
+    """
+    Proper PID decomposition where:
+    - Unique: Processed from single modality (correct)
+    - Redundant: Common info across modalities (needs cross-modal)
+    - Synergy: Emergent from combination (MUST be cross-modal)
+    """
     
-    def __init__(self, modality_dims, hidden_dim, 
-                 use_bottleneck=True, use_attention=True, use_aux_loss=False, num_classes=2):
+    def __init__(
+        self, 
+        modality_dims: List[int], 
+        hidden_dim: int,
+        num_classes: int = 2,
+    ):
         super().__init__()
         self.num_modalities = len(modality_dims)
-        self.use_aux_loss = use_aux_loss
+        self.hidden_dim = hidden_dim
         
-        self.branches = nn.ModuleList([
-            EnhancedModalityBranch(d, hidden_dim, len(modality_dims) - 1, 
-                                   use_bottleneck, use_attention)
-            for d in modality_dims
-        ])
-        self.restore = nn.ModuleList([
-            nn.Linear(hidden_dim, d) for d in modality_dims
-        ])
-        
-        # Optional auxiliary predictor
-        if use_aux_loss and num_classes > 1:
-            self.aux_predictor = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
+        # ========================================
+        # ENCODERS: Project each modality to common space
+        # ========================================
+        self.encoders = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(dim, hidden_dim),
+                nn.LayerNorm(hidden_dim),
                 nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(hidden_dim // 2, num_classes)
             )
-        else:
-            self.aux_predictor = None
+            for dim in modality_dims
+        ])
         
-        # Learnable component weights
+        # ========================================
+        # UNIQUE: Per-modality specific information
+        # ========================================
+        # This IS correct to be per-modality
+        self.unique_branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            for _ in range(self.num_modalities)
+        ])
+        
+        # ========================================
+        # REDUNDANT: Shared information (needs to see all modalities)
+        # ========================================
+        # Redundant = what's common, so we need cross-modal comparison
+        self.redundant_attention = nn.MultiheadAttention(
+            hidden_dim, num_heads=4, batch_first=True
+        )
+        self.redundant_project = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        
+        # ========================================
+        # SYNERGY: Emergent cross-modal information
+        # ========================================
+        # This MUST see all modalities together!
+        num_pairs = self.num_modalities * (self.num_modalities - 1) // 2
+        
+        # Bilinear for pairwise interactions
+        self.synergy_bilinear = nn.ModuleList([
+            nn.Bilinear(hidden_dim, hidden_dim, hidden_dim, bias=False)
+            for _ in range(num_pairs)
+        ])
+        
+        # Higher-order interactions
+        self.synergy_higher = nn.Sequential(
+            nn.Linear(hidden_dim * self.num_modalities, hidden_dim * 2),
+            nn.LayerNorm(hidden_dim * 2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+        )
+        
+        # Combine pairwise and higher-order
+        self.synergy_combine = nn.Sequential(
+            nn.Linear(hidden_dim * (num_pairs + 1), hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        
+        # ========================================
+        # RESTORE: Project back to original dimensions
+        # ========================================
+        self.restore = nn.ModuleList([
+            nn.Linear(hidden_dim, dim) for dim in modality_dims
+        ])
+        
+        # ========================================
+        # COMPONENT WEIGHTS (learnable)
+        # ========================================
         self.component_weights = nn.Parameter(torch.ones(3) / 3)
-
-    def forward(self, features, labels=None):
+        
+    def forward(self, features: List[torch.Tensor], labels=None):
+        """
+        Args:
+            features: List of [B, D_i] tensors, one per modality
+            
+        Returns:
+            processed: List of [B, D_i] restored features
+            (u, r, s): Tuple of [B, hidden_dim] PID components
+            losses: Dict of auxiliary losses
+        """
+        B = features[0].shape[0]
+        device = features[0].device
+        
+        # ========================================
+        # Step 1: Encode all modalities to common space
+        # ========================================
+        encoded = [
+            encoder(feat) for encoder, feat in zip(self.encoders, features)
+        ]  # List of [B, hidden_dim]
+        
+        # ========================================
+        # Step 2: Compute UNIQUE (per-modality, correct)
+        # ========================================
+        unique_list = [
+            branch(enc) for branch, enc in zip(self.unique_branches, encoded)
+        ]  # List of [B, hidden_dim]
+        
+        # ========================================
+        # Step 3: Compute REDUNDANT (cross-modal)
+        # ========================================
+        # Stack for attention: [B, num_modalities, hidden_dim]
+        stacked = torch.stack(encoded, dim=1)
+        
+        # Self-attention to find common information
+        redundant_attn, _ = self.redundant_attention(stacked, stacked, stacked)
+        
+        # Redundant = what all modalities agree on
+        # Take mean of attention output (consensus)
+        redundant = redundant_attn.mean(dim=1)  # [B, hidden_dim]
+        redundant = self.redundant_project(redundant)
+        
+        # ========================================
+        # Step 4: Compute SYNERGY (cross-modal, the key fix!)
+        # ========================================
+        # Pairwise bilinear interactions
+        pairwise = []
+        idx = 0
+        for i in range(self.num_modalities):
+            for j in range(i + 1, self.num_modalities):
+                interaction = self.synergy_combine[idx](encoded[i], encoded[j])
+                pairwise.append(interaction)
+                idx += 1
+        
+        # Higher-order (all modalities)
+        concat_all = torch.cat(encoded, dim=-1)
+        higher_order = self.synergy_higher(concat_all)
+        
+        # Combine all interactions
+        all_synergy = pairwise + [higher_order]
+        synergy = self.synergy_combine(torch.cat(all_synergy, dim=-1))
+        
+        # ========================================
+        # Step 5: Aggregate unique across modalities
+        # ========================================
+        unique = torch.stack(unique_list).mean(dim=0)  # [B, hidden_dim]
+        
+        # ========================================
+        # Step 6: Restore to original dimensions
+        # ========================================
+        weights = F.softmax(self.component_weights, dim=0)
+        
         processed = []
-        u_all, r_all, s_all = [], [], []
-        total_kl = torch.tensor(0.0, device=features[0].device)
-        
-        # First pass: encode all
-        encoded = []
-        for x, branch in zip(features, self.branches):
-            encoded.append(branch.unique(x))
-        
-        # Second pass: with cross-modal info
-        for i, (x, branch, restore) in enumerate(zip(features, self.branches, self.restore)):
-            other_features = [encoded[j] for j in range(len(encoded)) if j != i]
-            u, r, s, kl = branch(x, other_features)
-            
-            u_all.append(u)
-            r_all.append(r)
-            s_all.append(s)
-            total_kl = total_kl + kl
-            
-            # Weighted combination for restoration
-            weights = F.softmax(self.component_weights, dim=0)
-            combined = weights[0] * u + weights[1] * r + weights[2] * s
+        for i, restore in enumerate(self.restore):
+            # Each modality gets weighted combination
+            combined = weights[0] * unique_list[i] + weights[1] * redundant + weights[2] * synergy
             processed.append(restore(combined))
         
-        # Stack components
-        u_mean = torch.stack(u_all).mean(0)
-        r_mean = torch.stack(r_all).mean(0)
-        s_mean = torch.stack(s_all).mean(0)
+        # ========================================
+        # Compute auxiliary losses
+        # ========================================
+        losses = {}
         
-        # Compute losses
-        losses = {"kl": total_kl / self.num_modalities}
+        # Orthogonality between components
+        ortho_loss = (
+            torch.norm(unique.T @ redundant, p='fro') +
+            torch.norm(unique.T @ synergy, p='fro') +
+            torch.norm(redundant.T @ synergy, p='fro')
+        ) / (B * self.hidden_dim)
+        losses['ortho'] = ortho_loss
         
-        # Auxiliary prediction loss
-        if self.aux_predictor is not None and labels is not None:
-            aux_logits = self.aux_predictor(s_mean)
-            losses["aux"] = F.cross_entropy(aux_logits, labels)
+        # Balance loss: prevent any component from collapsing
+        u_norm = unique.norm(dim=1).mean()
+        r_norm = redundant.norm(dim=1).mean()
+        s_norm = synergy.norm(dim=1).mean()
+        target = (u_norm + r_norm + s_norm) / 3
+        balance_loss = (
+            (u_norm - target).abs() +
+            (r_norm - target).abs() +
+            (s_norm - target).abs()
+        )
+        losses['balance'] = balance_loss
         
-        return processed, (u_mean, r_mean, s_mean), losses
-
+        return processed, (unique, redundant, synergy), losses
+    
     def get_component_weights(self):
         return F.softmax(self.component_weights, dim=0).detach().cpu().numpy()
 

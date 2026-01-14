@@ -137,7 +137,8 @@ ${COMMON_ARGS} \
 --use_info_decomposition True \
 --use_enhanced_pid True \
 --decomposition_loss_weight 0.01 \
---use_comet True
+--use_comet True \
+--experiment_name "cross_modal_synergy_mosi_imoe"
 
 # echo ""
 # echo "========================================================================"
