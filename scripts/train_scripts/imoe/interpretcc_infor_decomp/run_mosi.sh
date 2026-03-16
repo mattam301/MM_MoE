@@ -135,6 +135,7 @@ ${COMMON_ARGS} \
 --interaction_loss_weight 0.1 \
 --fusion_sparse False \
 --use_info_decomposition True \
+--perturbation_mode pid_drop_unique \
 --decomposition_loss_weight 0.02 \
 --use_comet True \
 --experiment_name "cross_modal_synergy_new"

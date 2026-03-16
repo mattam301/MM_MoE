@@ -68,25 +68,29 @@ class InteractionExpert(nn.Module):
         """
         return self._forward_with_replacement(inputs, replace_index=None)
 
-    def forward_with_replacement(self, inputs, replace_index):
+    def forward_with_replacement(self, inputs, replace_index, replacement_tensor=None):
         """
         Forward pass with one modality replaced by a random vector.
 
         Args:
             inputs (list of tensors): List of modality inputs.
             replace_index (int): Index of the modality to replace. If None, no modality is replaced.
+            replacement_tensor (torch.Tensor, optional): If provided, use this tensor instead of a random vector.
         """
-        return self._forward_with_replacement(inputs, replace_index=replace_index)
+        return self._forward_with_replacement(
+            inputs, replace_index=replace_index, replacement_tensor=replacement_tensor
+        )
 
-    def _forward_with_replacement(self, inputs, replace_index=None):
+    def _forward_with_replacement(self, inputs, replace_index=None, replacement_tensor=None):
         """
         Internal function to handle forward pass with optional modality replacement.
         """
-        # Replace specified modality with a random vector
+        # Replace specified modality with a random or provided vector
         if replace_index is not None:
-            random_vector = torch.randn_like(inputs[replace_index])
+            if replacement_tensor is None:
+                replacement_tensor = torch.randn_like(inputs[replace_index])
             inputs = (
-                inputs[:replace_index] + [random_vector] + inputs[replace_index + 1 :]
+                inputs[:replace_index] + [replacement_tensor] + inputs[replace_index + 1 :]
             )
 
         x = self.fusion_model(inputs)
@@ -95,12 +99,15 @@ class InteractionExpert(nn.Module):
 
         return x
 
-    def forward_multiple(self, inputs):
+    def forward_multiple(self, inputs, replacement_tensors=None, perturbed_modality_idxs=None):
         """
         Perform (1 + n) forward passes: one with all modalities and one for each modality replaced.
 
         Args:
             inputs (list of tensors): List of modality inputs.
+            replacement_tensors (list[torch.Tensor] | None): Optional list of per-modality replacement tensors.
+                If provided, must have length == len(inputs). Each replacement is used for the corresponding modality.
+            perturbed_modality_idxs (list[int] | None): If provided, only run perturbed passes for these modality indices.
 
         Returns:
             List of outputs from the forward passes.
@@ -113,9 +120,13 @@ class InteractionExpert(nn.Module):
             outputs.append(output)
             gate_losses.append(gate_loss)
 
-            for i in range(len(inputs)):
+            idxs = perturbed_modality_idxs if perturbed_modality_idxs is not None else list(range(len(inputs)))
+            for i in idxs:
+                repl = None
+                if replacement_tensors is not None:
+                    repl = replacement_tensors[i]
                 output, gate_loss = self.forward_with_replacement(
-                    inputs, replace_index=i
+                    inputs, replace_index=i, replacement_tensor=repl
                 )
                 outputs.append(output)
                 gate_losses.append(gate_loss)
@@ -125,8 +136,12 @@ class InteractionExpert(nn.Module):
             outputs.append(self.forward(inputs))
 
         # Forward passes with each modality replaced
-        for i in range(len(inputs)):
-            outputs.append(self.forward_with_replacement(inputs, replace_index=i))
+        idxs = perturbed_modality_idxs if perturbed_modality_idxs is not None else list(range(len(inputs)))
+        for i in idxs:
+            repl = None
+            if replacement_tensors is not None:
+                repl = replacement_tensors[i]
+            outputs.append(self.forward_with_replacement(inputs, replace_index=i, replacement_tensor=repl))
 
         return outputs
 
@@ -160,6 +175,7 @@ class InteractionMoE(nn.Module):
             ]
         )
         self.fusion_sparse = fusion_sparse
+        self.num_perturb = None  # if set, only perturb a subset of modalities during training
 
     def uniqueness_loss_single(self, anchor, pos, neg):
         triplet_loss = nn.TripletMarginLoss(margin=1.0, p=2, eps=1e-7)
@@ -186,7 +202,7 @@ class InteractionMoE(nn.Module):
         total_redundancy_loss = total_redundancy_loss / len(positives)
         return total_redundancy_loss  # Redundancy loss
 
-    def forward(self, inputs):
+    def forward(self, inputs, replacement_tensors=None, perturbed_modality_idxs=None):
 
         expert_outputs = []
 
@@ -194,12 +210,22 @@ class InteractionMoE(nn.Module):
             expert_gate_losses = []
 
             for expert in self.interaction_experts:
-                expert_output, expert_gate_loss = expert.forward_multiple(inputs)
+                expert_output, expert_gate_loss = expert.forward_multiple(
+                    inputs,
+                    replacement_tensors=replacement_tensors,
+                    perturbed_modality_idxs=perturbed_modality_idxs,
+                )
                 expert_outputs.append(expert_output)
                 expert_gate_losses.append(expert_gate_loss)
         else:
             for expert in self.interaction_experts:
-                expert_outputs.append(expert.forward_multiple(inputs))
+                expert_outputs.append(
+                    expert.forward_multiple(
+                        inputs,
+                        replacement_tensors=replacement_tensors,
+                        perturbed_modality_idxs=perturbed_modality_idxs,
+                    )
+                )
 
         ###### Define interaction losses ######
         # First n experts are uniqueness interaction expert

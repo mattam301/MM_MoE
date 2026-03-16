@@ -100,6 +100,45 @@ def moe_forward_per_sample(model, fusion_input):
     return outputs, interaction_losses
 
 
+def moe_forward_per_sample_with_replacements(model, fusion_input, replacement_tensors=None, perturbed_modality_idxs=None):
+    """
+    Per-sample forward that supports custom replacement tensors.
+
+    Args:
+        model: InteractionMoE / InteractionMoERegression
+        fusion_input: list of modality tensors [B, D]
+        replacement_tensors: list of modality tensors [B, D] (or None for random)
+        perturbed_modality_idxs: optional list of modality indices to perturb
+
+    Returns:
+        outputs: [B, C] or [B, 1]
+        interaction_losses: list of scalars
+    """
+    B = fusion_input[0].shape[0]
+    outputs = []
+    interaction_losses_sum = None
+
+    for b in range(B):
+        single = [x[b:b+1] for x in fusion_input]
+        single_repl = None
+        if replacement_tensors is not None:
+            single_repl = [r[b:b+1] for r in replacement_tensors]
+
+        _, _, y, inter_losses = model(
+            single, replacement_tensors=single_repl, perturbed_modality_idxs=perturbed_modality_idxs
+        )
+
+        outputs.append(y)
+        if interaction_losses_sum is None:
+            interaction_losses_sum = inter_losses
+        else:
+            interaction_losses_sum = [a + bb for a, bb in zip(interaction_losses_sum, inter_losses)]
+
+    outputs = torch.cat(outputs, dim=0)
+    interaction_losses = [l / B for l in interaction_losses_sum]
+    return outputs, interaction_losses
+
+
 # ============================================================================
 # SIMPLE INFORMATION DECOMPOSITION (ORIGINAL - WORKING)
 # ============================================================================
@@ -406,9 +445,7 @@ class EnhancedInfoDecomposition(nn.Module):
         # ========================================
         # Step 2: Compute UNIQUE (per-modality, correct)
         # ========================================
-        unique_list = [
-            branch(enc) for branch, enc in zip(self.unique_branches, encoded)
-        ]  # List of [B, hidden_dim]
+        unique_list = [branch(enc) for branch, enc in zip(self.unique_branches, encoded)]  # List of [B, hidden_dim]
         
         # ========================================
         # Step 3: Compute REDUNDANT (cross-modal)
@@ -432,7 +469,7 @@ class EnhancedInfoDecomposition(nn.Module):
         idx = 0
         for i in range(self.num_modalities):
             for j in range(i + 1, self.num_modalities):
-                interaction = self.synergy_combine[idx](encoded[i], encoded[j])
+                interaction = self.synergy_bilinear[idx](encoded[i], encoded[j])
                 pairwise.append(interaction)
                 idx += 1
         
@@ -484,8 +521,34 @@ class EnhancedInfoDecomposition(nn.Module):
             (s_norm - target).abs()
         )
         losses['balance'] = balance_loss
+        losses['unique_list'] = unique_list
+        losses['weights'] = weights.detach()
         
         return processed, (unique, redundant, synergy), losses
+
+    def build_pid_replacements(self, unique_list, redundant, synergy, mode: str = "pid_drop_unique"):
+        """
+        Build per-modality replacement tensors in original feature spaces.
+
+        Args:
+            unique_list: list of [B, hidden_dim] per modality
+            redundant: [B, hidden_dim]
+            synergy: [B, hidden_dim]
+            mode: currently supports:
+                - "pid_drop_unique": replacement_i = restore_i(w_r * redundant + w_s * synergy)
+
+        Returns:
+            list of [B, D_i] tensors (one per modality)
+        """
+        weights = F.softmax(self.component_weights, dim=0)
+        repl = []
+        for i, restore in enumerate(self.restore):
+            if mode == "pid_drop_unique":
+                combined = weights[1] * redundant + weights[2] * synergy
+            else:
+                raise ValueError(f"Unknown PID replacement mode: {mode}")
+            repl.append(restore(combined))
+        return repl
     
     def get_component_weights(self):
         return F.softmax(self.component_weights, dim=0).detach().cpu().numpy()
@@ -621,7 +684,17 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
         params += list(decomp.parameters())
 
     optimizer = torch.optim.Adam(params, lr=args.lr)
-    criterion = nn.CrossEntropyLoss()
+    # Match legacy criterion selection to keep regression/multilabel executable
+    if args.data in ["adni", "enrico", "mosi", "sarcasm", "humor"]:
+        criterion = nn.CrossEntropyLoss()
+    elif args.data == "mimic":
+        criterion = nn.CrossEntropyLoss(torch.tensor([0.25, 0.75]).to(device))
+    elif args.data == "mosi_regression":
+        criterion = nn.SmoothL1Loss()
+    elif args.data == "mmimdb":
+        criterion = nn.BCEWithLogitsLoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
 
     # ======================================================
     # TRACKING
@@ -718,22 +791,68 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
             samples = {k: v.to(device) for k, v in samples.items()}
             optimizer.zero_grad()
 
-            fusion_input = [
-                ensure_2d(encoder_dict[m](samples[m]))
-                for m in samples
-            ]
+            modality_keys = list(samples.keys())
+            fusion_input = [ensure_2d(encoder_dict[m](samples[m])) for m in modality_keys]
 
-            outputs, inter_losses = moe_forward_per_sample(model, fusion_input)
-            loss = criterion(outputs, batch_labels)
+            # --------------------------------------------------
+            # Build replacement tensors for perturbed forward passes
+            # --------------------------------------------------
+            perturbed_modality_idxs = None
+            if getattr(args, "num_perturb", 0) and int(args.num_perturb) > 0:
+                n = min(int(args.num_perturb), len(modality_keys))
+                perm = torch.randperm(len(modality_keys), device=device)[:n]
+                perturbed_modality_idxs = perm.tolist()
 
-            # Apply decomposition loss if enabled
+            replacement_tensors = None
+            perturbation_mode = getattr(args, "perturbation_mode", "random")
+            if perturbation_mode == "zero":
+                replacement_tensors = [torch.zeros_like(x) for x in fusion_input]
+            elif perturbation_mode == "mean_batch":
+                replacement_tensors = [x.mean(dim=0, keepdim=True).expand_as(x) for x in fusion_input]
+            elif perturbation_mode == "pid_drop_unique":
+                if decomp is None or not isinstance(decomp, EnhancedInfoDecomposition):
+                    raise RuntimeError("perturbation_mode=pid_drop_unique requires --use_info_decomposition True")
+
+                # Build replacements in RAW space, then encode to fusion space
+                raw = [ensure_2d(samples[m]) for m in modality_keys]
+                repl_raw = None
+                _, (u, r, s), losses_dict = decomp(raw, batch_labels)
+                unique_list = losses_dict.get("unique_list", None)
+                if unique_list is None:
+                    raise RuntimeError("EnhancedInfoDecomposition did not return unique_list (unexpected)")
+                repl_raw = decomp.build_pid_replacements(unique_list, r, s, mode="pid_drop_unique")
+                replacement_tensors = [ensure_2d(encoder_dict[m](rr)) for m, rr in zip(modality_keys, repl_raw)]
+
+            # --------------------------------------------------
+            # Forward (per-sample) with optional replacements
+            # --------------------------------------------------
+            if replacement_tensors is None and perturbed_modality_idxs is None:
+                outputs, inter_losses = moe_forward_per_sample(model, fusion_input)
+            else:
+                outputs, inter_losses = moe_forward_per_sample_with_replacements(
+                    model,
+                    fusion_input,
+                    replacement_tensors=replacement_tensors,
+                    perturbed_modality_idxs=perturbed_modality_idxs,
+                )
+
+            # Task loss (dataset dependent)
+            if args.data == "mmimdb":
+                loss = criterion(outputs, batch_labels.float())
+            elif args.data == "mosi_regression":
+                loss = criterion(outputs.squeeze(), batch_labels)
+            else:
+                loss = criterion(outputs, batch_labels)
+
+            # Apply decomposition loss if enabled (if we already ran decomp above for PID replacements, reuse it)
             if decomp is not None:
-                raw = [ensure_2d(samples[m]) for m in sorted(samples)]
-                
                 if isinstance(decomp, EnhancedInfoDecomposition):
-                    _, (u, r, s), losses_dict = decomp(raw, batch_labels)
+                    if perturbation_mode != "pid_drop_unique":
+                        raw = [ensure_2d(samples[m]) for m in modality_keys]
+                        _, (u, r, s), losses_dict = decomp(raw, batch_labels)
                     loss = loss + enhanced_decomposition_loss(u, r, s, losses_dict, decomp_config)
                 else:
+                    raw = [ensure_2d(samples[m]) for m in modality_keys]
                     _, (u, r, s) = decomp(raw)
                     loss = loss + decomp_config["ortho_weight"] * decomposition_loss(u, r, s)
 
@@ -1141,5 +1260,25 @@ def add_pid_arguments(parser):
                         help="Weight for KL loss in enhanced PID")
     parser.add_argument("--pid_aux_weight", type=float, default=0.3,
                         help="Weight for auxiliary loss in enhanced PID")
+
+    # Perturbation strategy (for interaction loss forward passes)
+    parser.add_argument(
+        "--perturbation_mode",
+        type=str,
+        default="random",
+        choices=[
+            "random",          # legacy behavior
+            "zero",            # replace with zeros
+            "mean_batch",      # replace with batch mean vector
+            "pid_drop_unique", # replace with PID (R+S) reconstruction (requires --use_info_decomposition)
+        ],
+        help="How to construct modality replacements for perturbed forward passes",
+    )
+    parser.add_argument(
+        "--num_perturb",
+        type=int,
+        default=0,
+        help="If > 0, only perturb a random subset of modalities each iteration (legacy LessPerturbedForwardPass ablation).",
+    )
     
     return parser

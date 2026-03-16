@@ -125,6 +125,19 @@ def parse_args():
             "--decomposition_loss_weight", type=float, default=0.01,
             help="Overall weight for decomposition loss"
         )
+        parser.add_argument(
+            "--perturbation_mode",
+            type=str,
+            default="random",
+            choices=["random", "zero", "mean_batch", "pid_drop_unique"],
+            help="How to construct modality replacements for perturbed forward passes",
+        )
+        parser.add_argument(
+            "--num_perturb",
+            type=int,
+            default=0,
+            help="If > 0, only perturb a random subset of modalities each iteration.",
+        )
 
     return parser.parse_known_args()
 

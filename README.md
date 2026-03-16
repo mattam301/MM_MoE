@@ -1,3 +1,40 @@
+# MM_MoE (I2MoE extension): PID-guided perturbations
+
+This repo extends the legacy I2MoE training recipe by optionally adding an **Enhanced PID (Partial Information Decomposition)** module and by supporting multiple **perturbation strategies** for the interaction-loss forward passes (random / zero / mean / PID-derived).
+
+## Quickstart
+
+### MOSI (classification)
+
+Run the provided script:
+
+- `scripts/train_scripts/imoe/interpretcc_infor_decomp/run_mosi.sh`
+
+Key flags (high-signal):
+
+- `--use_info_decomposition {True|False}`: enable Enhanced PID regularization
+- `--perturbation_mode {random|zero|mean_batch|pid_drop_unique}`: how to replace a modality during perturbed passes
+- `--num_perturb N`: if `N>0`, perturb only `N` modalities per iteration
+
+## What changed vs legacy I2MoE
+
+- **Same core InteractionMoE**: experts + reweighting + interaction losses are preserved.
+- **Safer training**: per-sample MoE adapter prevents batch-shape collapse in some fusion setups.
+- **Experimentable perturbations**: modality replacement can be random (legacy), zero, mean-batch, or PID-derived.
+- **Enhanced PID** (optional): cross-modal redundant/synergy computation + regularization losses and PID analysis outputs.
+
+## Experiment strategy
+
+See:
+
+- `docs/experiment_strategy.md`
+
+## Legacy reference
+
+The legacy I2MoE snapshot lives under:
+
+- `legacy_I2MOE/`
+
 # I<sup>2</sup>MoE: Interpretable Multimodal Interaction-aware Mixture-of-Experts
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT) [![ICML 2025 (Poster)](https://img.shields.io/badge/ICML'25-blue)](https://icml.cc/)
 
