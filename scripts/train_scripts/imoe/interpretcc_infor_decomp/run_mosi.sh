@@ -135,10 +135,9 @@ ${COMMON_ARGS} \
 --interaction_loss_weight 0.1 \
 --fusion_sparse False \
 --use_info_decomposition True \
---use_enhanced_pid True \
 --decomposition_loss_weight 0.02 \
 --use_comet True \
---experiment_name "cross_modal_synergy_mosi_imoe"
+--experiment_name "cross_modal_synergy_new"
 
 # echo ""
 # echo "========================================================================"

@@ -598,10 +598,9 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
     # DECOMPOSITION MODULE (OPTIONAL)
     # ======================================================
     decomp = None
-    use_simple = getattr(args, 'use_info_decomposition', False)
-    use_enhanced = getattr(args, 'use_enhanced_pid', False)
-    print(f"Using decomposition: simple={use_simple}, enhanced={use_enhanced}")
-    if use_enhanced:
+    use_pid = getattr(args, 'use_info_decomposition', False)
+    print(f"Using decomposition: enabled={use_pid}")
+    if use_pid:
         dims = [input_dims[m] for m in sorted(input_dims)]
         decomp = EnhancedInfoDecomposition(
             dims, args.hidden_dim,
@@ -611,10 +610,6 @@ def train_and_evaluate_imoe(args, seed, fusion_model, fusion):
             num_classes=n_labels
         ).to(device)
         print("Using Enhanced PID Module")
-    elif use_simple:
-        dims = [input_dims[m] for m in sorted(input_dims)]
-        decomp = InfoDecompositionPreprocessor(dims, args.hidden_dim).to(device)
-        print("Using Simple PID Module")
 
     # ======================================================
     # OPTIMIZER
@@ -1129,21 +1124,19 @@ def train_and_evaluate_imoe_regression(args, seed, fusion_model, fusion):
 def add_pid_arguments(parser):
     """Add PID arguments to argument parser."""
     
-    # Simple PID
+    # Master switch for PID-based information decomposition
     parser.add_argument("--use_info_decomposition", action="store_true",
-                        help="Use simple PID module")
-    parser.add_argument("--decomposition_loss_weight", type=float, default=1.0,
-                        help="Weight for decomposition loss")
+                        help="Enable information-theoretic PID module")
     
-    # Enhanced PID
-    parser.add_argument("--use_enhanced_pid", action="store_true",
-                        help="Use enhanced PID module")
+    # Enhanced PID configuration (used when --use_info_decomposition is True)
     parser.add_argument("--use_bottleneck", action="store_true", default=True,
                         help="Use variational bottleneck in enhanced PID")
     parser.add_argument("--use_attention", action="store_true", default=True,
                         help="Use cross-modal attention in enhanced PID")
     parser.add_argument("--use_aux_predictor", action="store_true", default=False,
                         help="Use auxiliary predictor in enhanced PID")
+    parser.add_argument("--decomposition_loss_weight", type=float, default=1.0,
+                        help="Weight for core decomposition loss (orthogonality)")
     parser.add_argument("--pid_kl_weight", type=float, default=0.001,
                         help="Weight for KL loss in enhanced PID")
     parser.add_argument("--pid_aux_weight", type=float, default=0.3,
